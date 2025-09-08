@@ -3,7 +3,7 @@
 Project Summary Report: AI Health Assistant with Gemini
 
 Project Overview:
-This project is an AI-powered health assistant that predicts possible diseases based on user-input symptoms. It integrates a Neural Network (MLPClassifier) for disease prediction and Google Gemini for generating friendly, informative summaries of predictions.
+This project is an AI-powered health assistant that predicts possible diseases based on user-input symptoms. It integrates a Neural Network (MLPClassifier) for disease prediction and Google Gemini for generating friendly, informative summaries of predictions. This is later made available to use for all on render. Link: https://med-ai-9xcn.onrender.com/
 
 Key Features:
 
