@@ -8,8 +8,6 @@ import os
 from dotenv import load_dotenv
 
 # -------------------- Phase 1: Gemini Setup --------------------
-# Load API key from .env file
-load_dotenv()
 api_key = os.getenv("GEMINI_API_KEY")
 
 if not api_key:
@@ -111,3 +109,4 @@ if st.button("🚀 Get Prediction"):
     """, unsafe_allow_html=True)
 
 #python -m streamlit run app.py
+
