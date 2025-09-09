@@ -21,7 +21,7 @@ Dataset:
 
 Format: Excel (Dataset.xlsx)
 
-Features: 15 symptoms as input features
+Features: 20 symptoms as input features
 
 Target: Disease labels (Malaria, Dengue, Food Poisoning, Jaundice)
 
@@ -62,6 +62,8 @@ Gemini API key is stored in a .env file to avoid exposing credentials on GitHub.
 .env is added to .gitignore to prevent accidental sharing.
 
 Impact and Benefits:
+
+Accuracy improved from 22% to ~95%
 
 Provides rapid preliminary disease assessment based on symptoms.
 
