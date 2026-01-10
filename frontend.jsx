@@ -1,11 +1,11 @@
 import React, { useState, useEffect } from "react";
 
 /**
- * MED-AI: PERSONALIZED EDITION (V4.2)
- * - Added: Integrated BMI Calculator with color-coded status
- * - Added: Profile Photo Support
- * - Enhanced: Vibrant Button Styling
- * - Added: Clinical Profile Persistence
+ * MED-AI: PERSONALIZED EDITION (V4.4)
+ * - Added: Interactive Profile Dropdown
+ * - Added: Detailed Clinical Identity View (Navbar)
+ * - Added: Enforced Login on Startup
+ * - Added: Password & Forgot Password Logic
  */
 
 const Icons = {
@@ -29,23 +29,32 @@ const Icons = {
   ),
   Scale: () => (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M16 16c0 1.1-1.1 2-2.5 2s-2.5-0.9-2.5-2 1.1-2 2.5-2 2.5 0.9 2.5 2z"/><path d="M7 21h10"/><path d="M12 3v18"/><path d="M3 7l2 2"/><path d="M19 9l2-2"/><path d="M3 7c0 6 4.5 11 9 11s9-5 9-11"/></svg>
+  ),
+  Lock: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
   )
 };
 
 export default function App() {
-  const [screen, setScreen] = useState("home");
+  const [screen, setScreen] = useState("login");
   const [symptoms, setSymptoms] = useState([]);
   const [selectedSymptoms, setSelectedSymptoms] = useState({});
   const [results, setResults] = useState([]);
   const [history, setHistory] = useState([]);
   const [searchQuery, setSearchQuery] = useState("");
   const [error, setError] = useState(null);
+  
+  // Auth state
+  const [isNewUser, setIsNewUser] = useState(false);
+  const [loginData, setLoginData] = useState({ email: "", password: "" });
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
 
   // User Profile State
   const [userProfile, setUserProfile] = useState({
     name: "", age: "", weight: "", height: "",
     email: "", phone: "", city: "", state: "", country: "",
-    photo: ""
+    photo: "", password: ""
   });
 
   const fallbackSymptoms = ["itching", "skin_rash", "shivering", "joint_pain", "stomach_pain", "fatigue", "cough", "high_fever"];
@@ -55,7 +64,14 @@ export default function App() {
     const savedProfile = localStorage.getItem("med_ai_profile");
     
     if (savedHistory) setHistory(JSON.parse(savedHistory));
-    if (savedProfile) setUserProfile(JSON.parse(savedProfile));
+    
+    if (savedProfile) {
+      const parsedProfile = JSON.parse(savedProfile);
+      setUserProfile(parsedProfile);
+      setIsNewUser(false);
+    } else {
+      setIsNewUser(true);
+    }
     
     fetch("http://127.0.0.1:8000/symptoms")
       .then(res => res.json())
@@ -63,13 +79,10 @@ export default function App() {
       .catch(() => setSymptoms(fallbackSymptoms));
   }, []);
 
-  // BMI Calculation Logic
   const calculateBMI = () => {
     const w = parseFloat(userProfile.weight);
-    const h = parseFloat(userProfile.height) / 100; // Convert cm to meters
-    if (w > 0 && h > 0) {
-      return (w / (h * h)).toFixed(1);
-    }
+    const h = parseFloat(userProfile.height) / 100;
+    if (w > 0 && h > 0) return (w / (h * h)).toFixed(1);
     return null;
   };
 
@@ -89,33 +102,59 @@ export default function App() {
     setUserProfile(prev => ({ ...prev, [name]: value }));
   };
 
+  const handleLoginChange = (e) => {
+    const { name, value } = e.target;
+    setLoginData(prev => ({ ...prev, [name]: value }));
+  };
+
   const handlePhotoUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setUserProfile(prev => ({ ...prev, photo: reader.result }));
-      };
+      reader.onloadend = () => setUserProfile(prev => ({ ...prev, photo: reader.result }));
       reader.readAsDataURL(file);
     }
   };
 
-  const saveProfile = (e) => {
+  const handleLogin = (e) => {
+    e.preventDefault();
+    if (loginData.email === userProfile.email && loginData.password === userProfile.password) {
+      setIsLoggedIn(true);
+      setScreen("home");
+      setError(null);
+    } else {
+      setError("Invalid clinical credentials. Please try again.");
+    }
+  };
+
+  const handleRegister = (e) => {
     e.preventDefault();
     localStorage.setItem("med_ai_profile", JSON.stringify(userProfile));
-    setScreen("symptoms");
+    setIsLoggedIn(true);
+    setIsNewUser(false);
+    setScreen("home");
+  };
+
+  const handleLogout = () => {
+    setIsLoggedIn(false);
+    setShowProfileMenu(false);
+    setScreen("login");
+  };
+
+  const handleForgotPassword = () => {
+    if (!userProfile.email) {
+      setError("No account found on this system.");
+      return;
+    }
+    const confirmReset = window.confirm(`System detected account for ${userProfile.email}. Would you like to reset your credentials? This will clear local data.`);
+    if (confirmReset) {
+      localStorage.removeItem("med_ai_profile");
+      window.location.reload();
+    }
   };
 
   const toggleSymptom = (s) => {
     setSelectedSymptoms(prev => ({ ...prev, [s]: !prev[s] }));
-  };
-
-  const startAssessment = () => {
-    if (!userProfile.name) {
-      setScreen("login");
-    } else {
-      setScreen("symptoms");
-    }
   };
 
   async function analyzeSymptoms() {
@@ -199,35 +238,188 @@ It is not a medical diagnosis. Consult a healthcare professional immediately.
       
       <nav className="top-nav">
         <div className="nav-container">
-          <div className="brand" onClick={() => setScreen("home")}>
+          <div className="brand" onClick={() => setScreen(isLoggedIn ? "home" : "login")}>
             <div className="icon-box"><Icons.Pulse /></div>
             <span className="main-logo">MED-AI</span>
           </div>
-          <div className="user-indicator" onClick={() => setScreen("login")}>
-            {userProfile.photo ? (
-              <img src={userProfile.photo} alt="Profile" className="nav-profile-img" />
-            ) : (
-              <Icons.User />
-            )}
-            <span>{userProfile.name || "Guest Mode"}</span>
-          </div>
+          
+          {isLoggedIn && (
+            <div className="profile-nav-section">
+              <div 
+                className={`user-indicator ${showProfileMenu ? 'active' : ''}`} 
+                onClick={() => setShowProfileMenu(!showProfileMenu)}
+              >
+                {userProfile.photo ? (
+                  <img src={userProfile.photo} alt="Profile" className="nav-profile-img" />
+                ) : (
+                  <div className="nav-profile-placeholder"><Icons.User /></div>
+                )}
+              </div>
+
+              {showProfileMenu && (
+                <div className="profile-dropdown anim-fade">
+                  <div className="dropdown-header">
+                    <div className="header-photo">
+                      {userProfile.photo ? (
+                        <img src={userProfile.photo} alt="Profile" />
+                      ) : (
+                        <div className="placeholder-icon"><Icons.User /></div>
+                      )}
+                    </div>
+                    <div className="header-info">
+                      <span className="name">{userProfile.name}</span>
+                      <span className="email">{userProfile.email}</span>
+                    </div>
+                  </div>
+                  <div className="dropdown-divider"></div>
+                  <div className="dropdown-stats">
+                    <div className="stat-item">
+                      <span className="label">BMI</span>
+                      <span className={`value ${bmiInfo.class}`}>{bmiValue || "--"}</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="label">Weight</span>
+                      <span className="value">{userProfile.weight}kg</span>
+                    </div>
+                    <div className="stat-item">
+                      <span className="label">Height</span>
+                      <span className="value">{userProfile.height}cm</span>
+                    </div>
+                  </div>
+                  <div className="dropdown-divider"></div>
+                  <div className="dropdown-details">
+                    <div className="detail-row"><span>Age:</span> {userProfile.age} yrs</div>
+                    <div className="detail-row"><span>Phone:</span> {userProfile.phone}</div>
+                    <div className="detail-row"><span>Location:</span> {userProfile.city}, {userProfile.state}</div>
+                    <div className="detail-row"><span>Country:</span> {userProfile.country}</div>
+                  </div>
+                  <div className="dropdown-divider"></div>
+                  <button className="logout-btn" onClick={handleLogout}>Log Out</button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </nav>
 
       <main className="main-stage">
         
+        {/* LOGIN / REGISTRATION SCREEN */}
+        {screen === "login" && (
+          <div className="login-section anim-fade">
+            <div className="form-header">
+              <h2>{isNewUser ? "Clinical Onboarding" : "Clinical Access"}</h2>
+              <p>{isNewUser ? "Complete your profile to start screening." : "Enter your credentials to access the engine."}</p>
+            </div>
+
+            {error && <div className="error-bar">{error}</div>}
+
+            {!isNewUser ? (
+              <form className="profile-form" onSubmit={handleLogin}>
+                <div className="form-row full">
+                  <label>Clinical Email</label>
+                  <input required name="email" value={loginData.email} onChange={handleLoginChange} placeholder="Email" />
+                </div>
+                <div className="form-row full">
+                  <label>Access Password</label>
+                  <input required type="password" name="password" value={loginData.password} onChange={handleLoginChange} placeholder="••••••••" />
+                </div>
+                <button type="submit" className="primary-button full-width">Unlock Access</button>
+                <div className="form-footer">
+                  <button type="button" className="text-link" onClick={handleForgotPassword}>Forgot Password?</button>
+                  <button type="button" className="text-link" onClick={() => setIsNewUser(true)}>New Profile</button>
+                </div>
+              </form>
+            ) : (
+              <form className="profile-form" onSubmit={handleRegister}>
+                <div className="photo-upload-container">
+                  <label className="photo-label">
+                    <div className="photo-preview-box">
+                      {userProfile.photo ? (
+                        <img src={userProfile.photo} alt="Preview" className="photo-preview" />
+                      ) : (
+                        <div className="photo-placeholder"><Icons.Camera /><span>Upload Photo</span></div>
+                      )}
+                    </div>
+                    <input type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden-input" />
+                  </label>
+                </div>
+
+                <div className="form-row full">
+                  <label>Full Name</label>
+                  <input required name="name" value={userProfile.name} onChange={handleProfileChange} placeholder="Name" />
+                </div>
+                <div className="form-group-2">
+                  <div className="form-row">
+                    <label>Clinical Email</label>
+                    <input required type="email" name="email" value={userProfile.email} onChange={handleProfileChange} placeholder="Email" />
+                  </div>
+                  <div className="form-row">
+                    <label>Set Password</label>
+                    <input required type="password" name="password" value={userProfile.password} onChange={handleProfileChange} placeholder="••••••••" />
+                  </div>
+                </div>
+                <div className="form-group-3">
+                  <div className="form-row">
+                    <label>Age</label>
+                    <input required type="number" name="age" value={userProfile.age} onChange={handleProfileChange} placeholder="Yrs" />
+                  </div>
+                  <div className="form-row">
+                    <label>Weight (kg)</label>
+                    <input required type="number" name="weight" value={userProfile.weight} onChange={handleProfileChange} placeholder="Kg" />
+                  </div>
+                  <div className="form-row">
+                    <label>Height (cm)</label>
+                    <input required type="number" name="height" value={userProfile.height} onChange={handleProfileChange} placeholder="Cm" />
+                  </div>
+                </div>
+                <div className="form-group-2">
+                  <div className="form-row">
+                    <label>Phone Number</label>
+                    <input required type="tel" name="phone" value={userProfile.phone} onChange={handleProfileChange} placeholder="Phone" />
+                  </div>
+                  <div className="form-row">
+                    <label>City</label>
+                    <input required name="city" value={userProfile.city} onChange={handleProfileChange} placeholder="City" />
+                  </div>
+                </div>
+                <div className="form-group-2">
+                  <div className="form-row">
+                    <label>State</label>
+                    <input required name="state" value={userProfile.state} onChange={handleProfileChange} placeholder="State" />
+                  </div>
+                  <div className="form-row">
+                    <label>Country</label>
+                    <input required name="country" value={userProfile.country} onChange={handleProfileChange} placeholder="Country" />
+                  </div>
+                </div>
+                <button type="submit" className="primary-button full-width">Initialize Profile</button>
+                {localStorage.getItem("med_ai_profile") && (
+                  <button type="button" className="text-link center" onClick={() => setIsNewUser(false)}>Back to Login</button>
+                )}
+              </form>
+            )}
+          </div>
+        )}
+
         {/* HOME SCREEN */}
         {screen === "home" && (
           <div className="screen-home anim-fade">
             <div className="hero-grid">
               <div className="hero-content">
-                <div className="mini-badge">NEURAL VERSION 4.2</div>
+                <div className="mini-badge">NEURAL VERSION 4.4</div>
                 <h1>Advanced <br/>Personal Analysis<span>.</span></h1>
-                <p>Personalized medical pattern identifying engine. Enter your profile to begin clinical correlation.</p>
+                <p>Personalized medical pattern identifying engine. Connected as <strong>{userProfile.name}</strong>.</p>
+                
+                {bmiValue && (
+                  <div className={`bmi-mini-card ${bmiInfo.class}`}>
+                    <Icons.Scale />
+                    <span>Your Clinical BMI: <strong>{bmiValue}</strong> ({bmiInfo.label})</span>
+                  </div>
+                )}
+
                 <div className="hero-actions">
-                  <button className="primary-button" onClick={startAssessment}>
-                    {userProfile.name ? "Start New Assessment" : "Setup Profile to Start"}
-                  </button>
+                  <button className="primary-button" onClick={() => setScreen("symptoms")}>Start New Assessment</button>
                 </div>
               </div>
               
@@ -245,91 +437,6 @@ It is not a medical diagnosis. Consult a healthcare professional immediately.
                 )}
               </div>
             </div>
-          </div>
-        )}
-
-        {/* LOGIN / PROFILE SCREEN */}
-        {screen === "login" && (
-          <div className="login-section anim-fade">
-            <div className="form-header">
-              <h2>Clinical Profile</h2>
-              <p>Please provide your basic information to personalize your screening.</p>
-            </div>
-            <form className="profile-form" onSubmit={saveProfile}>
-              <div className="photo-upload-container">
-                <label className="photo-label">
-                  <div className="photo-preview-box">
-                    {userProfile.photo ? (
-                      <img src={userProfile.photo} alt="Preview" className="photo-preview" />
-                    ) : (
-                      <div className="photo-placeholder">
-                        <Icons.Camera />
-                        <span>Upload Photo</span>
-                      </div>
-                    )}
-                  </div>
-                  <input type="file" accept="image/*" onChange={handlePhotoUpload} className="hidden-input" />
-                </label>
-              </div>
-
-              {/* BMI Live Preview Box */}
-              {bmiValue && (
-                <div className={`bmi-preview-box ${bmiInfo.class}`}>
-                  <div className="bmi-header">
-                    <Icons.Scale />
-                    <span>Calculated BMI</span>
-                  </div>
-                  <div className="bmi-stats">
-                    <span className="bmi-num">{bmiValue}</span>
-                    <span className="bmi-status">{bmiInfo.label}</span>
-                  </div>
-                </div>
-              )}
-
-              <div className="form-row full">
-                <label>Full Name</label>
-                <input required name="name" value={userProfile.name} onChange={handleProfileChange} placeholder="John Doe" />
-              </div>
-              <div className="form-row full">
-                <label>Email Address</label>
-                <input required type="email" name="email" value={userProfile.email} onChange={handleProfileChange} placeholder="john@example.com" />
-              </div>
-              <div className="form-group-3">
-                <div className="form-row">
-                  <label>Age</label>
-                  <input required type="number" name="age" value={userProfile.age} onChange={handleProfileChange} placeholder="Yrs" />
-                </div>
-                <div className="form-row">
-                  <label>Weight (kg)</label>
-                  <input required type="number" name="weight" value={userProfile.weight} onChange={handleProfileChange} placeholder="Kg" />
-                </div>
-                <div className="form-row">
-                  <label>Height (cm)</label>
-                  <input required type="number" name="height" value={userProfile.height} onChange={handleProfileChange} placeholder="Cm" />
-                </div>
-              </div>
-              <div className="form-group-2">
-                <div className="form-row">
-                  <label>Phone Number</label>
-                  <input required type="tel" name="phone" value={userProfile.phone} onChange={handleProfileChange} placeholder="+1..." />
-                </div>
-                <div className="form-row">
-                  <label>City</label>
-                  <input required name="city" value={userProfile.city} onChange={handleProfileChange} placeholder="City" />
-                </div>
-              </div>
-              <div className="form-group-2">
-                <div className="form-row">
-                  <label>State / Province</label>
-                  <input required name="state" value={userProfile.state} onChange={handleProfileChange} placeholder="State" />
-                </div>
-                <div className="form-row">
-                  <label>Country</label>
-                  <input required name="country" value={userProfile.country} onChange={handleProfileChange} placeholder="Country" />
-                </div>
-              </div>
-              <button type="submit" className="primary-button full-width">Save & Continue</button>
-            </form>
           </div>
         )}
 
@@ -435,47 +542,71 @@ const css = `
 .med-ai-root * { box-sizing: border-box; }
 
 .top-nav { position: fixed; top: 0; width: 100%; z-index: 1000; display: flex; justify-content: center; padding: 20px; }
-.nav-container { width: 100%; max-width: 1200px; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(15px); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; }
+.nav-container { width: 100%; max-width: 1200px; background: rgba(15, 23, 42, 0.8); backdrop-filter: blur(15px); border: 1px solid rgba(255,255,255,0.1); border-radius: 20px; padding: 12px 24px; display: flex; justify-content: space-between; align-items: center; position: relative; }
 .brand { display: flex; align-items: center; gap: 12px; cursor: pointer; }
 .icon-box { background: #2DD4BF; padding: 8px; border-radius: 10px; color: #0F172A; display: flex; }
 .main-logo { font-weight: 900; font-size: 1.2rem; letter-spacing: -1px; }
 
-.user-indicator { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 800; color: #94A3B8; cursor: pointer; background: rgba(255,255,255,0.05); padding: 8px 16px; border-radius: 12px; }
-.user-indicator:hover { color: #FFF; background: rgba(255,255,255,0.1); }
-.nav-profile-img { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; border: 1px solid #2DD4BF; }
+/* Profile Navbar & Dropdown */
+.profile-nav-section { position: relative; }
+.user-indicator { 
+  width: 40px; height: 40px; border-radius: 12px; 
+  border: 2px solid rgba(45, 212, 191, 0.2); 
+  cursor: pointer; overflow: hidden; transition: 0.3s;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.05);
+}
+.user-indicator:hover, .user-indicator.active { border-color: #2DD4BF; background: rgba(45, 212, 191, 0.1); }
+.nav-profile-img { width: 100%; height: 100%; object-fit: cover; }
+.nav-profile-placeholder { color: #94A3B8; }
+
+.profile-dropdown {
+  position: absolute; top: 60px; right: 0; width: 320px;
+  background: #1E293B; border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 24px; box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+  padding: 24px; z-index: 1001;
+}
+
+.dropdown-header { display: flex; align-items: center; gap: 16px; margin-bottom: 20px; }
+.header-photo { width: 60px; height: 60px; border-radius: 16px; overflow: hidden; background: #0F172A; border: 1px solid rgba(45, 212, 191, 0.3); }
+.header-photo img { width: 100%; height: 100%; object-fit: cover; }
+.placeholder-icon { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; color: #64748B; }
+.header-info { display: flex; flex-direction: column; gap: 4px; }
+.header-info .name { font-weight: 800; font-size: 1.1rem; color: #FFF; }
+.header-info .email { font-size: 12px; color: #94A3B8; }
+
+.dropdown-divider { height: 1px; background: rgba(255,255,255,0.05); margin: 0 -24px 20px -24px; }
+
+.dropdown-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }
+.stat-item { display: flex; flex-direction: column; gap: 4px; }
+.stat-item .label { font-size: 10px; font-weight: 800; color: #64748B; text-transform: uppercase; }
+.stat-item .value { font-weight: 900; font-size: 14px; }
+
+.dropdown-details { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.detail-row { font-size: 13px; color: #CBD5E1; }
+.detail-row span { color: #64748B; font-weight: 700; width: 80px; display: inline-block; }
+
+.logout-btn { 
+  width: 100%; padding: 12px; border-radius: 12px; border: none;
+  background: rgba(239, 68, 68, 0.1); color: #EF4444;
+  font-weight: 800; font-size: 13px; cursor: pointer; transition: 0.3s;
+}
+.logout-btn:hover { background: rgba(239, 68, 68, 0.2); }
 
 .main-stage { max-width: 1200px; margin: 0 auto; padding: 120px 24px 60px 24px; }
-
-/* Home Hero */
-.hero-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 40px; }
-.mini-badge { display: inline-block; padding: 4px 12px; background: rgba(45, 212, 191, 0.1); border: 1px solid rgba(45, 212, 191, 0.2); border-radius: 100px; color: #2DD4BF; font-size: 10px; font-weight: 800; margin-bottom: 20px; }
-h1 { font-size: 5rem; font-weight: 900; line-height: 0.95; margin: 0 0 20px 0; }
-h1 span { color: #2DD4BF; }
-.hero-content p { color: #94A3B8; font-size: 1.2rem; margin-bottom: 40px; }
-
-.history-sidebar { background: rgba(30, 41, 59, 0.3); border: 1px solid rgba(255,255,255,0.05); border-radius: 30px; padding: 30px; }
-.sidebar-header { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 0.9rem; color: #2DD4BF; text-transform: uppercase; margin-bottom: 20px; }
-.history-item { padding: 15px; border-bottom: 1px solid rgba(255,255,255,0.05); }
-.history-date { font-size: 10px; color: #64748B; margin-bottom: 4px; }
-.history-result { font-weight: 700; color: #F8FAFC; }
-
-/* BMI Preview Styles */
-.bmi-preview-box { padding: 20px; border-radius: 20px; margin-bottom: 30px; transition: 0.3s; }
-.bmi-yellow { background: rgba(234, 179, 8, 0.1); border: 2px solid #EAB308; color: #EAB308; }
-.bmi-green { background: rgba(34, 197, 94, 0.1); border: 2px solid #22C55E; color: #22C55E; }
-.bmi-black { background: rgba(0, 0, 0, 0.4); border: 2px solid #FFF; color: #FFF; box-shadow: 0 0 20px rgba(255,255,255,0.1); }
-.bmi-header { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 800; text-transform: uppercase; margin-bottom: 10px; opacity: 0.8; }
-.bmi-stats { display: flex; align-items: baseline; gap: 15px; }
-.bmi-num { font-size: 2.5rem; font-weight: 900; }
-.bmi-status { font-size: 1rem; font-weight: 700; }
-
-.bmi-badge { padding: 4px 12px; border-radius: 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; }
 
 /* Form Styles */
 .login-section { max-width: 600px; margin: 0 auto; background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(255,255,255,0.05); padding: 40px; border-radius: 40px; }
 .form-header { margin-bottom: 30px; text-align: center; }
 .form-header h2 { font-size: 2.5rem; font-weight: 900; margin-bottom: 8px; }
 .form-header p { color: #64748B; font-weight: 500; }
+
+.error-bar { background: rgba(239, 68, 68, 0.1); border: 1px solid #EF4444; color: #EF4444; padding: 12px; border-radius: 12px; font-size: 12px; font-weight: 700; margin-bottom: 20px; text-align: center; }
+
+.form-footer { display: flex; justify-content: space-between; margin-top: 15px; }
+.text-link { background: none; border: none; color: #94A3B8; font-size: 12px; font-weight: 700; cursor: pointer; text-decoration: underline; }
+.text-link:hover { color: #2DD4BF; }
+.text-link.center { width: 100%; text-align: center; margin-top: 20px; }
 
 .photo-upload-container { display: flex; justify-content: center; margin-bottom: 30px; }
 .photo-label { cursor: pointer; }
@@ -486,40 +617,54 @@ h1 span { color: #2DD4BF; }
 .hidden-input { display: none; }
 
 .profile-form { display: flex; flex-direction: column; gap: 20px; }
-.form-row { display: flex; flex-direction: column; gap: 8px; }
+.form-row { display: flex; flex-direction: column; gap: 8px; width: 100%; }
 .form-row label { font-size: 11px; font-weight: 800; color: #2DD4BF; text-transform: uppercase; letter-spacing: 1px; }
-.form-row input { background: #0F172A; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; padding: 14px; color: #FFF; font-weight: 600; font-size: 14px; width: 100%; min-width: 0; }
+.form-row input { 
+  background: #0F172A; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; 
+  padding: 14px; color: #FFF; font-weight: 600; font-size: 14px; width: 100%;
+}
 .form-row input:focus { outline: none; border-color: #2DD4BF; box-shadow: 0 0 0 4px rgba(45, 212, 191, 0.1); }
 
 .form-group-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; width: 100%; }
 .form-group-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; width: 100%; }
 .full-width { width: 100%; margin-top: 10px; }
 
-/* Biomarker Selection */
-.header-row { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 40px; border-bottom: 1px solid rgba(255,255,255,0.05); padding-bottom: 20px; }
-.user-welcome { font-size: 12px; color: #64748B; margin-top: 5px; display: block; }
-.biomarker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; max-height: 50vh; overflow-y: auto; padding-right: 10px; }
-.marker-card { background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(255,255,255,0.05); padding: 20px; border-radius: 20px; cursor: pointer; display: flex; align-items: center; gap: 12px; }
-.marker-card.selected { background: #2DD4BF; color: #0F172A; }
+/* Hero / General Styles */
+.hero-grid { display: grid; grid-template-columns: 1.5fr 1fr; gap: 40px; }
+h1 { font-size: 5rem; font-weight: 900; line-height: 0.95; margin: 0 0 20px 0; }
+h1 span { color: #2DD4BF; }
+.mini-badge { display: inline-block; padding: 4px 12px; background: rgba(45, 212, 191, 0.1); border: 1px solid rgba(45, 212, 191, 0.2); border-radius: 100px; color: #2DD4BF; font-size: 10px; font-weight: 800; margin-bottom: 20px; }
+.hero-content p { color: #94A3B8; font-size: 1.2rem; margin-bottom: 30px; }
+
+.bmi-mini-card { display: flex; align-items: center; gap: 12px; padding: 12px 20px; border-radius: 12px; margin-bottom: 30px; width: fit-content; font-size: 14px; font-weight: 600; }
+.bmi-yellow { background: rgba(234, 179, 8, 0.1); border: 2px solid #EAB308; color: #EAB308; }
+.bmi-green { background: rgba(34, 197, 94, 0.1); border: 2px solid #22C55E; color: #22C55E; }
+.bmi-black { background: rgba(0, 0, 0, 0.4); border: 2px solid #FFF; color: #FFF; }
+.bmi-badge { padding: 4px 12px; border-radius: 6px; font-size: 10px; font-weight: 800; text-transform: uppercase; }
+
+.history-sidebar { background: rgba(30, 41, 59, 0.3); border: 1px solid rgba(255,255,255,0.05); border-radius: 30px; padding: 30px; }
+.sidebar-header { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 0.9rem; color: #2DD4BF; text-transform: uppercase; margin-bottom: 20px; }
+.history-item { padding: 15px; border-bottom: 1px solid rgba(255,255,255,0.05); }
+.history-date { font-size: 10px; color: #64748B; margin-bottom: 4px; }
+.history-result { font-weight: 700; color: #F8FAFC; }
 
 .primary-button { background: #FFF; color: #0F172A; border: none; padding: 18px 36px; border-radius: 16px; font-weight: 800; cursor: pointer; transition: 0.3s; }
 .primary-button:hover { background: #2DD4BF; transform: translateY(-2px); }
 
-/* Buttons Enhancement */
+.biomarker-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; max-height: 50vh; overflow-y: auto; padding-right: 10px; }
+.marker-card { background: rgba(30, 41, 59, 0.4); border: 1px solid rgba(255,255,255,0.05); padding: 20px; border-radius: 20px; cursor: pointer; display: flex; align-items: center; gap: 12px; }
+.marker-card.selected { background: #2DD4BF; color: #0F172A; }
+
 .btn-action { background: linear-gradient(135deg, #2DD4BF 0%, #0D9488 100%); color: #0F172A; padding: 14px 28px; border-radius: 14px; border: none; font-weight: 900; cursor: pointer; transition: 0.3s; box-shadow: 0 4px 15px rgba(45, 212, 191, 0.3); }
-.btn-action:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(45, 212, 191, 0.4); }
-
 .outline-btn { background: #334155; color: #F8FAFC; border: none; padding: 14px 28px; border-radius: 14px; cursor: pointer; margin-top: 20px; font-weight: 800; transition: 0.3s; }
-.outline-btn:hover { background: #475569; transform: scale(1.02); }
 
-/* Results */
 .results-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin: 40px 0; }
 .primary-result { background: rgba(30, 41, 59, 0.5); border: 2px solid #2DD4BF; padding: 40px; border-radius: 40px; }
 .result-clinical-meta { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .primary-result h3 { font-size: 4rem; font-weight: 900; margin: 0 0 20px 0; font-style: italic; text-transform: uppercase; }
 
 @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-.anim-fade { animation: fadeIn 0.6s ease forwards; }
+.anim-fade { animation: fadeIn 0.4s ease forwards; }
 
 .neural-spinner { position: relative; width: 80px; height: 80px; display: flex; align-items: center; justify-content: center; color: #2DD4BF; margin-bottom: 24px; }
 .ring { position: absolute; width: 100%; height: 100%; border: 3px solid rgba(45, 212, 191, 0.1); border-top-color: #2DD4BF; border-radius: 50%; animation: spin 1s linear infinite; }
