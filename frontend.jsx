@@ -1,53 +1,69 @@
 import { useState, useEffect } from "react";
-import {
-  createUserWithEmailAndPassword,
-  signInWithEmailAndPassword,
-} from "firebase/auth";
-import { auth } from "./firebase"; // ✅ REQUIRED
 
 export default function App() {
-  const [user, setUser] = useState(null);
   const [screen, setScreen] = useState("home");
-  const [authMode, setAuthMode] = useState("login");
-  const [error, setError] = useState("");
+  const [symptoms, setSymptoms] = useState([]);
+  const [selectedSymptoms, setSelectedSymptoms] = useState({});
+  const [results, setResults] = useState([]);
 
-  /* ---------- AUTH HANDLER ---------- */
-  async function handleAuth(e) {
-    e.preventDefault();
-    setError("");
+  /* FETCH SYMPTOMS */
+  useEffect(() => {
+    fetch("http://127.0.0.1:8000/symptoms")
+      .then(res => res.json())
+      .then(data => setSymptoms(data.symptoms || []))
+      .catch(console.error);
+  }, []);
 
-    const email = e.target.email.value;
-    const password = e.target.password.value;
+  /* SEND SYMPTOMS TO BACKEND */
+  async function analyzeSymptoms() {
+    setScreen("loading");
+
+    const selected = Object.keys(selectedSymptoms).filter(
+      s => selectedSymptoms[s]
+    );
 
     try {
-      let userCredential;
+      const res = await fetch("http://127.0.0.1:8000/predict", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symptoms: selected })
+      });
 
-      if (authMode === "signup") {
-        userCredential = await createUserWithEmailAndPassword(
-          auth,
-          email,
-          password
-        );
-      } else {
-        userCredential = await signInWithEmailAndPassword(
-          auth,
-          email,
-          password
+      const data = await res.json();
+
+      let parsedResults = [];
+
+      // ✅ Case 1: { top_3: [ { disease, probability } ] }
+      if (Array.isArray(data.top_3)) {
+        parsedResults = data.top_3;
+      }
+
+      // ✅ Case 2: { predictions: [ ["Disease", prob], ... ] }
+      else if (Array.isArray(data.predictions)) {
+        parsedResults = data.predictions.map(p => ({
+          disease: p[0],
+          probability: p[1]
+        }));
+      }
+
+      // ✅ Case 3: { result: { Disease: prob, ... } }
+      else if (typeof data.result === "object") {
+        parsedResults = Object.entries(data.result).map(
+          ([disease, probability]) => ({
+            disease,
+            probability
+          })
         );
       }
 
-      // ✅ SUCCESS
-      setUser(userCredential.user);
-      setScreen("home");
-    } catch (err) {
-      // ❌ ERROR
-      setError(err.message);
-    }
-  }
+      setResults(parsedResults);
+      setScreen("results");
 
-  function logout() {
-    setUser(null);
-    setAuthMode("login");
+    } catch (err) {
+      console.error(err);
+      alert("Prediction failed");
+      setScreen("symptoms");
+    }
   }
 
   return (
@@ -57,71 +73,85 @@ export default function App() {
       <div className="app">
         <header className="topbar">
           <h1>Med-AI</h1>
-          {user && (
-            <button className="logout" onClick={logout}>
-              Logout
-            </button>
-          )}
         </header>
 
         <main className="main">
-          {/* AUTH */}
-          {!user && (
-            <section className="auth">
-              <h2>
-                {authMode === "login"
-                  ? "Login to Med-AI"
-                  : "Create your Med-AI account"}
-              </h2>
-
-              <form onSubmit={handleAuth}>
-                <input name="email" type="email" placeholder="Email" required />
-                <input
-                  name="password"
-                  type="password"
-                  placeholder="Password"
-                  required
-                />
-                <button type="submit">
-                  {authMode === "login" ? "Login" : "Create Account"}
-                </button>
-              </form>
-
-              {error && <p className="error">{error}</p>}
-
-              <p className="auth-switch">
-                {authMode === "login" ? (
-                  <>
-                    New here?{" "}
-                    <span onClick={() => setAuthMode("signup")}>
-                      Create an account
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    Already have an account?{" "}
-                    <span onClick={() => setAuthMode("login")}>
-                      Login instead
-                    </span>
-                  </>
-                )}
-              </p>
-            </section>
-          )}
-
-          {/* HOME */}
-          {user && screen === "home" && (
-            <section className="hero">
+          {screen === "home" && (
+            <section className="card hero">
               <div>
-                <h2>Welcome, {user.email}</h2>
-                <p>
-                  Med-AI uses AI and clinical reasoning to analyze symptoms.
-                </p>
-                <button onClick={() => setScreen("symptoms")}>
+                <h2>Not feeling your best?</h2>
+                <p>AI-powered symptom analysis.</p>
+                <button className="primary" onClick={() => setScreen("symptoms")}>
                   Start Symptom Check
                 </button>
               </div>
               <div className="brain">🧠</div>
+            </section>
+          )}
+
+          {screen === "symptoms" && (
+            <section className="card">
+              <h2>Add Symptoms</h2>
+
+              <div className="symptom-grid">
+                {symptoms.map(s => (
+                  <label
+                    key={s}
+                    className={`symptom-card ${selectedSymptoms[s] ? "active" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={!!selectedSymptoms[s]}
+                      onChange={() =>
+                        setSelectedSymptoms(prev => ({
+                          ...prev,
+                          [s]: !prev[s]
+                        }))
+                      }
+                    />
+                    <span>{s.replace(/_/g, " ")}</span>
+                  </label>
+                ))}
+              </div>
+
+              <div className="actions">
+                <button className="secondary" onClick={() => setScreen("home")}>
+                  Back
+                </button>
+                <button className="primary" onClick={analyzeSymptoms}>
+                  Analyze Symptoms
+                </button>
+              </div>
+            </section>
+          )}
+
+          {screen === "loading" && (
+            <section className="card loading">
+              <div className="loader">🧠</div>
+              <h2>Running ML model…</h2>
+            </section>
+          )}
+
+          {screen === "results" && (
+            <section className="card">
+              <h2>Prediction Results</h2>
+
+              {results.map((r, i) => (
+                <div key={i} className="result-card">
+                  <strong>{r.disease}</strong>
+                  <div className="bar">
+                    <div
+                      className="fill"
+                      style={{ width: `${Math.round(r.probability * 100)}%` }}
+                    />
+                  </div>
+                  <small>{Math.round(r.probability * 100)}% confidence</small>
+                </div>
+              ))}
+
+              <p className="warning">
+                ⚠️ Informational only. Consult a doctor.
+              </p>
             </section>
           )}
         </main>
@@ -130,11 +160,59 @@ export default function App() {
   );
 }
 
-/* ---------- CSS ADDITION ---------- */
+/* ================= CSS (UNCHANGED) ================= */
 const css = `
-.error {
-  color: #dc2626;
-  font-size: 14px;
-  margin-top: 10px;
+.app {
+  width: 100vw;
+  height: 100vh;
+  background: linear-gradient(135deg,#2563eb,#dc2626);
+}
+
+.card {
+  background: white;
+  padding: 40px;
+  border-radius: 20px;
+  box-shadow: 0 20px 40px rgba(0,0,0,.15);
+}
+
+.symptom-grid {
+  display: grid;
+  grid-template-columns: repeat(4,1fr);
+  gap: 15px;
+}
+
+.symptom-card {
+  border: 1px solid #ddd;
+  padding: 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  color: #111;
+}
+
+.symptom-card.active {
+  background: #2563eb;
+  color: white;
+}
+
+.bar {
+  height: 8px;
+  background: #eee;
+  border-radius: 8px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+
+.fill {
+  height: 100%;
+  background: linear-gradient(90deg,#2563eb,#dc2626);
+}
+
+.loader {
+  font-size: 120px;
+  animation: pulse 1.2s infinite;
+}
+
+@keyframes pulse {
+  50% { transform: scale(1.15); }
 }
 `;
