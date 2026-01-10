@@ -1,11 +1,137 @@
 import pandas as pd
 import numpy as np
-
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.neural_network import MLPClassifier
 from sklearn.metrics import accuracy_score, classification_report
 import joblib
+
+# ====================================================
+# ========== PRECAUTION TAG MAPPING ==================
+# ====================================================
+# These are GENERAL, NON-MEDICAL precaution categories.
+# They are NOT treatments or diagnoses.
+
+PRECAUTION_TAGS = {
+    "Common Cold": [
+        "rest",
+        "hydration",
+        "avoid_cold_exposure"
+    ],
+    "Influenza": [
+        "rest",
+        "hydration",
+        "monitor_fever",
+        "avoid_contact"
+    ],
+    "Viral Fever": [
+        "rest",
+        "hydration",
+        "monitor_temperature"
+    ],
+    "Dengue": [
+        "rest",
+        "hydration",
+        "avoid_mosquito_exposure",
+        "monitor_fever"
+    ],
+    "Chikungunya": [
+        "rest",
+        "hydration",
+        "joint_care",
+        "avoid_mosquito_exposure"
+    ],
+    "Jaundice": [
+        "diet_care",
+        "rest",
+        "avoid_alcohol",
+        "monitor_symptoms"
+    ],
+    "Food Poisoning": [
+        "hydration",
+        "diet_care",
+        "rest"
+    ],
+    "Gastroenteritis": [
+        "hydration",
+        "diet_care",
+        "rest"
+    ],
+    "Urinary Tract Infection": [
+        "hydration",
+        "maintain_hygiene",
+        "monitor_symptoms"
+    ],
+    "Migraine": [
+        "rest",
+        "avoid_bright_light",
+        "stress_management"
+    ],
+    "Bronchitis": [
+        "rest",
+        "avoid_smoke",
+        "monitor_breathing"
+    ],
+    "Pneumonia": [
+        "rest",
+        "monitor_breathing",
+        "avoid_cold_exposure"
+    ],
+    "Typhoid": [
+        "rest",
+        "hydration",
+        "diet_care"
+    ],
+    "Diabetes": [
+        "diet_control",
+        "regular_monitoring",
+        "healthy_lifestyle"
+    ],
+    "Hypertension": [
+        "stress_management",
+        "diet_control",
+        "regular_monitoring"
+    ],
+    "Anemia": [
+        "balanced_diet",
+        "rest",
+        "monitor_energy_levels"
+    ],
+    "Asthma": [
+        "avoid_triggers",
+        "monitor_breathing",
+        "rest"
+    ],
+    "Sinusitis": [
+        "rest",
+        "avoid_cold_exposure",
+        "hydration"
+    ],
+    "Allergic Rhinitis": [
+        "avoid_allergens",
+        "maintain_hygiene"
+    ]
+}
+
+# ====================================================
+# ===== COLLECT PRECAUTIONS FROM TOP-3 DISEASES ======
+# ====================================================
+
+def get_precaution_tags(top_diseases):
+    """
+    top_diseases -> list of disease names (Top-3 predictions)
+
+    Returns:
+        A unique list of precaution tags relevant to all predictions
+    """
+    collected_tags = set()
+
+    for disease in top_diseases:
+        if disease in PRECAUTION_TAGS:
+            for tag in PRECAUTION_TAGS[disease]:
+                collected_tags.add(tag)
+
+    return list(collected_tags)
 
 # ================= LOAD DATA =================
 df = pd.read_csv(r"C:\Users\User\OneDrive\Desktop\medaidataset\final_medai_dataset.csv")
@@ -110,13 +236,32 @@ for i in range(len(y_test)):
     ranked = sorted(adjusted_scores.items(), key=lambda x: x[1], reverse=True)
     top1 = ranked[0][0]
     top2 = ranked[1][0]
+    top3 = ranked[2][0]
+    
+    # ====================================================
+    # ===== ATTACH PRECAUTION TAGS TO TOP-3 RESULTS ======
+    # ====================================================
 
+    top_diseases = [top1, top2, top3]
+
+    precaution_tags = get_precaution_tags(top_diseases)
+    
+
+    # ====================================================
+    # ===== STORE PRECAUTION TEXT FOR LATER EXPOSURE =====
+    # ====================================================
+
+    # Example: collect precaution texts if needed for API / logging
+    # (does NOT affect training or evaluation)
+
+    
     if true_disease == top1:
         final_correct.append(True)
     elif are_siblings(true_disease, top1) or are_siblings(true_disease, top2):
         final_correct.append(True)
     else:
         final_correct.append(False)
+
 
 final_accuracy = np.mean(final_correct)
 print("Final Accuracy (Sibling + Strong Symptoms):", final_accuracy)
