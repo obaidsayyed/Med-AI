@@ -18,6 +18,7 @@ export default function App() {
   async function analyzeSymptoms() {
     setScreen("loading");
 
+    // Filter to get only the active keys (which match dataset column names)
     const selected = Object.keys(selectedSymptoms).filter(
       s => selectedSymptoms[s]
     );
@@ -31,40 +32,20 @@ export default function App() {
 
       const data = await res.json();
 
-      let parsedResults = [];
-
-      // ✅ Case 1: { top_3: [ { disease, probability } ] }
-      if (Array.isArray(data.top_3)) {
-        parsedResults = data.top_3;
-      }
-
-      // ✅ Case 2: { predictions: [ ["Disease", prob], ... ] }
-      else if (Array.isArray(data.predictions)) {
-        parsedResults = data.predictions.map(p => ({
-          disease: p[0],
-          probability: p[1]
-        }));
-      }
-
-      // ✅ Case 3: { result: { Disease: prob, ... } }
-      else if (typeof data.result === "object") {
-        parsedResults = Object.entries(data.result).map(
-          ([disease, probability]) => ({
-            disease,
-            probability
-          })
-        );
-      }
-
-      setResults(parsedResults);
+      // Expecting a fixed schema: { predictions: ["Disease Name 1", "Disease Name 2", ...] }
+      // We take the raw list of names directly.
+      setResults(data.predictions || []);
       setScreen("results");
 
     } catch (err) {
       console.error(err);
-      alert("Prediction failed");
+      // alert("Prediction failed"); // Removed alert to keep flow smoother, can uncomment if needed
       setScreen("symptoms");
     }
   }
+
+  // Helper labels for the ranked output
+  const rankLabels = ["Most likely", "Also possible", "Other consideration"];
 
   return (
     <>
@@ -109,6 +90,7 @@ export default function App() {
                         }))
                       }
                     />
+                    {/* Display human-readable text, but we store/send the exact key 's' */}
                     <span>{s.replace(/_/g, " ")}</span>
                   </label>
                 ))}
@@ -134,24 +116,31 @@ export default function App() {
 
           {screen === "results" && (
             <section className="card">
-              <h2>Prediction Results</h2>
+              <h2>Analysis Results</h2>
 
-              {results.map((r, i) => (
-                <div key={i} className="result-card">
-                  <strong>{r.disease}</strong>
-                  <div className="bar">
-                    <div
-                      className="fill"
-                      style={{ width: `${Math.round(r.probability * 100)}%` }}
-                    />
-                  </div>
-                  <small>{Math.round(r.probability * 100)}% confidence</small>
-                </div>
-              ))}
+              <div className="results-list">
+                {results.length > 0 ? (
+                  results.slice(0, 3).map((diseaseName, i) => (
+                    <div key={i} className="result-card">
+                      <div className="rank-label">{rankLabels[i] || "Alternative"}</div>
+                      <strong className="disease-name">{diseaseName}</strong>
+                    </div>
+                  ))
+                ) : (
+                  <p>No specific matching conditions found.</p>
+                )}
+              </div>
 
-              <p className="warning">
-                ⚠️ Informational only. Consult a doctor.
-              </p>
+              <div className="disclaimer-box">
+                <p className="warning">
+                  <strong>⚠️ Medical Disclaimer:</strong> This tool is for informational and screening purposes only. 
+                  It does not provide medical advice, diagnosis, or treatment. 
+                  Always seek the advice of your physician or other qualified health provider.
+                </p>
+                <button className="secondary small" onClick={() => setScreen("symptoms")}>
+                  Start Over
+                </button>
+              </div>
             </section>
           )}
         </main>
@@ -160,59 +149,188 @@ export default function App() {
   );
 }
 
-/* ================= CSS (UNCHANGED) ================= */
+/* ================= CSS ================= */
 const css = `
 .app {
   width: 100vw;
-  height: 100vh;
-  background: linear-gradient(135deg,#2563eb,#dc2626);
+  min-height: 100vh;
+  background: linear-gradient(135deg, #2563eb, #dc2626);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: #333;
+}
+
+.topbar {
+  padding: 20px;
+  color: white;
+  text-align: center;
+}
+
+.main {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 20px;
 }
 
 .card {
   background: white;
   padding: 40px;
   border-radius: 20px;
-  box-shadow: 0 20px 40px rgba(0,0,0,.15);
+  box-shadow: 0 20px 40px rgba(0,0,0,0.15);
+  margin-bottom: 20px;
 }
 
-.symptom-grid {
-  display: grid;
-  grid-template-columns: repeat(4,1fr);
-  gap: 15px;
+.hero {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
-.symptom-card {
-  border: 1px solid #ddd;
-  padding: 14px;
-  border-radius: 12px;
+.hero h2 {
+  font-size: 2rem;
+  margin-bottom: 10px;
+}
+
+.brain {
+  font-size: 80px;
+}
+
+h2 {
+  margin-top: 0;
+}
+
+/* Buttons */
+button {
+  border: none;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-size: 1rem;
   cursor: pointer;
-  color: #111;
+  transition: transform 0.1s;
 }
 
-.symptom-card.active {
+button:active {
+  transform: scale(0.98);
+}
+
+button.primary {
   background: #2563eb;
   color: white;
 }
 
-.bar {
-  height: 8px;
-  background: #eee;
-  border-radius: 8px;
-  overflow: hidden;
-  margin: 8px 0;
+button.secondary {
+  background: #f3f4f6;
+  color: #374151;
 }
 
-.fill {
-  height: 100%;
-  background: linear-gradient(90deg,#2563eb,#dc2626);
+button.small {
+  padding: 8px 16px;
+  font-size: 0.9rem;
+}
+
+/* Symptoms */
+.symptom-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 15px;
+  margin: 20px 0;
+}
+
+.symptom-card {
+  border: 1px solid #e5e7eb;
+  padding: 14px;
+  border-radius: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  transition: all 0.2s;
+  user-select: none;
+}
+
+.symptom-card:hover {
+  border-color: #2563eb;
+}
+
+.symptom-card.active {
+  background: #eff6ff;
+  border-color: #2563eb;
+  color: #1e40af;
+}
+
+.actions {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 30px;
+}
+
+/* Loading */
+.loading {
+  text-align: center;
+  padding: 60px;
 }
 
 .loader {
-  font-size: 120px;
+  font-size: 80px;
   animation: pulse 1.2s infinite;
+  margin-bottom: 20px;
 }
 
 @keyframes pulse {
-  50% { transform: scale(1.15); }
+  50% { transform: scale(1.1); opacity: 0.8; }
+}
+
+/* Results */
+.results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  margin: 20px 0;
+}
+
+.result-card {
+  background: #f8fafc;
+  border-left: 5px solid #2563eb;
+  padding: 20px;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+}
+
+.result-card:nth-child(2) {
+  border-left-color: #60a5fa;
+}
+
+.result-card:nth-child(3) {
+  border-left-color: #93c5fd;
+}
+
+.rank-label {
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.05em;
+  color: #64748b;
+  margin-bottom: 5px;
+}
+
+.disease-name {
+  font-size: 1.25rem;
+  color: #0f172a;
+}
+
+.disclaimer-box {
+  margin-top: 30px;
+  padding-top: 20px;
+  border-top: 1px solid #e2e8f0;
+  text-align: center;
+}
+
+.warning {
+  background: #ffffb1;
+  color: #854d0e;
+  padding: 15px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  margin-bottom: 15px;
+  text-align: left;
 }
 `;
