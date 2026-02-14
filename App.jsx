@@ -9,7 +9,8 @@ import {
   updatePassword,
   reauthenticateWithCredential,
   EmailAuthProvider,
-  updateEmail
+  updateEmail,
+  sendEmailVerification
 } from "firebase/auth";
 import { 
   getFirestore, 
@@ -209,16 +210,15 @@ export default function App() {
       fetch(`${API_BASE}/symptoms`)
   .then(res => res.json())
   .then(data => {
-    console.log("Symptoms from backend:", data);
-    setSymptoms(Array.isArray(data) ? data : fallbackSymptoms);
-  })
-  .catch(() => setSymptoms(fallbackSymptoms));
-
-   
+    const validData = data.symptoms || data; 
+        
+        setSymptoms(Array.isArray(validData) ? validData : fallbackSymptoms);
+      })
+      .catch(() => setSymptoms(fallbackSymptoms));
+    // ---------------------------------------------
 
     return () => unsubscribe();
   }, []);
-
   // Clear notification after 3 seconds
   useEffect(() => {
     if (notification) {
@@ -226,6 +226,13 @@ export default function App() {
       return () => clearTimeout(timer);
     }
   }, [notification]);
+  useEffect(() => {
+    if (error) {
+      const timer = setTimeout(() => setError(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [error]);
+  
 
   // --- FIRESTORE HELPERS ---
   const fetchUserData = async (uid, email) => {
@@ -307,8 +314,17 @@ export default function App() {
   const handlePhotoUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
+      // Check if file is larger than 1MB (1,048,576 bytes)
+      if (file.size > 1000000) {
+        setError("Photo is too large. Please upload an image smaller than 1MB.");
+        return;
+      }
+
       const reader = new FileReader();
-      reader.onloadend = () => setUserProfile(prev => ({ ...prev, photo: reader.result }));
+      reader.onloadend = () => {
+        setUserProfile(prev => ({ ...prev, photo: reader.result }));
+        setError(null); // Clear any previous errors
+      };
       reader.readAsDataURL(file);
     }
   };
@@ -318,16 +334,28 @@ export default function App() {
     e.preventDefault();
     setError(null);
     try {
-      await signInWithEmailAndPassword(auth, loginData.email, loginData.password);
+      // 1. Try to sign in
+      const userCredential = await signInWithEmailAndPassword(auth, loginData.email, loginData.password);
+      const user = userCredential.user;
+
+      // 2. CHECK IF VERIFIED
+      if (!user.emailVerified) {
+        await signOut(auth); // Kick them out if not verified
+        setError("Please verify your email before logging in.");
+        return;
+      }
+
+      // 3. If verified, proceed (The onAuthStateChanged listener handles the rest)
     } catch (err) {
       console.error(err);
-      setError("Invalid credentials. Please check your email and password.");
+      setError("Invalid credentials or internal error.");
     }
   };
 
   const handleRegister = async (e) => {
     e.preventDefault();
     setError(null);
+    setNotification(null); // Clear old messages
     
     const safeEmail = userProfile.email ? userProfile.email.trim() : "";
     
@@ -337,18 +365,26 @@ export default function App() {
     }
 
     try {
+        // 1. Create the user in Firebase
         const userCredential = await createUserWithEmailAndPassword(auth, safeEmail, userProfile.password);
-        const uid = userCredential.user.uid;
+        const user = userCredential.user;
         
+        // 2. Send Verification Email
+        await sendEmailVerification(user);
+
+        // 3. Save their profile to Database
         const { password, ...safeProfile } = userProfile;
         const profileToSave = { ...safeProfile, email: safeEmail };
         
-        await setDoc(doc(db, 'artifacts', appId, 'users', uid, 'profile', 'main'), profileToSave);
-        await setDoc(doc(db, 'artifacts', appId, 'users', uid, 'data', 'history'), { records: [] });
+        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'main'), profileToSave);
+        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'data', 'history'), { records: [] });
         
-        setIsNewUser(false);
-        setNotification("Account created! Please log in.");
+        // 4. Force Logout & Show Instruction
+        await signOut(auth);
+        setIsNewUser(false); // Switch back to Login screen
+        setNotification("Account created! Verification link sent to your email.");
         setUserProfile(prev => ({...prev, password: ""}));
+
     } catch (err) {
         console.error(err);
         setError(err.message || "Registration failed");
@@ -399,13 +435,18 @@ export default function App() {
       setNotification("Password changed successfully!");
       setPasswordChange({ current: "", new: "" });
     } catch (err) {
-      if (err.code === 'auth/wrong-password') {
-        setError("Current password is incorrect.");
-      } else {
-        setError("Failed to change password: " + err.message);
-      }
+      if (err.code === 'auth/wrong-password' || err.code === 'auth/invalid-credential') {
+      setError("Wrong current password entered."); // <--- Custom Red Message
+    } else if (err.code === 'auth/weak-password') {
+      setError("Password should be at least 6 characters.");
+    } else if (err.code === 'auth/too-many-requests') {
+      setError("Too many failed attempts. Please try again later.");
+    } else {
+      setError("Failed to update password. Please try again.");
     }
-  };
+    // ----------------------
+  }
+};
 
   const handleLogout = async () => {
     try {
@@ -539,6 +580,7 @@ It is not a medical diagnosis. Consult a healthcare professional immediately.
       <div className="ambient-orb orb-2"></div>
       
       {notification && <div className="notification-toast">{notification}</div>}
+      {error && <div className="error-toast">{error}</div>}
 
       {/* History Details Modal */}
       {viewingHistoryItem && (
@@ -827,7 +869,16 @@ It is not a medical diagnosis. Consult a healthcare professional immediately.
                 )}
 
                 <div className="hero-actions">
-                  <button className="primary-button lg glow-effect" onClick={() => setScreen("symptoms")}>Start New Assessment</button>
+                  <button 
+                    className="primary-button lg glow-effect" 
+                    onClick={() => {
+                      setSelectedSymptoms({});  // <--- CLEARS OLD SYMPTOMS
+                      setResults([]);           // <--- CLEARS OLD RESULTS
+                      setScreen("symptoms");    // <--- THEN GOES TO SCREEN
+                    }}
+                  >
+                    Start New Assessment
+                  </button>
                 </div>
               </div>
               
@@ -878,21 +929,48 @@ It is not a medical diagnosis. Consult a healthcare professional immediately.
                   <span>{s.replace(/_/g, " ")}</span>
                 </div>
               ))}
+              
+              {/* FIX FOR OVERLAP: Invisible spacer so you can scroll to the very bottom */}
+              <div style={{ height: "100px", width: "100%" }}></div> 
             </div>
 
-            <div className="floating-dock glass-card">
-              <div className="dock-stats">
-                <span className="count">{Object.values(selectedSymptoms).filter(Boolean).length}</span>
-                <span className="label">Biomarkers</span>
-              </div>
-              <div className="dock-btns">
-                <button className="btn-secondary" onClick={() => setScreen("home")}>Cancel</button>
-                <button className="btn-action glow-effect" onClick={analyzeSymptoms}>Analyze Patterns</button>
-              </div>
-            </div>
+            {/* THE STATIC ACTION BAR (Placed correctly) */}
+            {/* --- NEW LAYOUT: CANCEL | COUNT | ANALYZE --- */}
+      {Object.values(selectedSymptoms).filter(Boolean).length > 0 && (
+        <div className="action-bar-static" style={{justifyContent: 'space-between'}}>
+          
+          {/* 1. LEFT: Cancel Button */}
+          <button 
+            className="btn-secondary" 
+            onClick={() => setSelectedSymptoms({})}
+            style={{padding: '10px 20px', border: 'none', color: '#94a3b8'}}
+          >
+            Cancel
+          </button>
+
+          {/* 2. CENTER: The Counter */}
+          <div className="dock-stats" style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
+            <span className="count" style={{fontSize: '1.5rem', fontWeight: '800', lineHeight: '1'}}>
+              {Object.values(selectedSymptoms).filter(Boolean).length}
+            </span>
+            <span className="label" style={{fontSize: '0.65rem', textTransform: 'uppercase', letterSpacing: '1px', opacity: 0.7}}>
+              Selected
+            </span>
           </div>
-        )}
 
+          {/* 3. RIGHT: Analyze Button */}
+          <button 
+            className="primary-button btn-compact" 
+            onClick={analyzeSymptoms}
+          >
+            Analyze
+          </button>
+
+        </div>
+      )}
+
+          </div> 
+        )}
         {/* LOADING SCREEN */}
         {screen === "loading" && (
           <div className="loading-state anim-fade-in">
@@ -968,9 +1046,9 @@ const css = `
   --bg-dark: #0B1120;
   --glass-bg: rgba(30, 41, 59, 0.4);
   --glass-border: rgba(255, 255, 255, 0.08);
-  --primary: #22d3ee; /* Cyan */
+  --primary: #22d3ee;
   --primary-glow: rgba(34, 211, 238, 0.5);
-  --secondary: #8b5cf6; /* Violet */
+  --secondary: #8b5cf6;
   --text-main: #f8fafc;
   --text-muted: #94a3b8;
   --success: #10b981;
@@ -989,6 +1067,7 @@ body { margin: 0; overflow-x: hidden; background: var(--bg-dark); }
   width: 100vw;
   position: relative;
   overflow-x: hidden;
+  box-sizing: border-box; /* Added to prevent scrollbar issues */
 }
 
 /* --- AMBIENT BACKGROUND --- */
@@ -1000,25 +1079,46 @@ body { margin: 0; overflow-x: hidden; background: var(--bg-dark); }
   z-index: 0;
   animation: floatOrb 20s infinite ease-in-out;
 }
-.orb-1 {
-  top: -10%;
-  left: -10%;
-  width: 50vw;
-  height: 50vw;
-  background: radial-gradient(circle, var(--secondary), transparent 70%);
-}
-.orb-2 {
-  bottom: -10%;
-  right: -10%;
-  width: 40vw;
-  height: 40vw;
-  background: radial-gradient(circle, var(--primary), transparent 70%);
-  animation-delay: -10s;
-}
+.orb-1 { top: -10%; left: -10%; width: 50vw; height: 50vw; background: radial-gradient(circle, var(--secondary), transparent 70%); }
+.orb-2 { bottom: -10%; right: -10%; width: 40vw; height: 40vw; background: radial-gradient(circle, var(--primary), transparent 70%); animation-delay: -10s; }
 
 @keyframes floatOrb {
   0%, 100% { transform: translate(0, 0); }
   50% { transform: translate(30px, 50px); }
+}
+  /* ... existing animations code ... */
+
+/* --- NOTIFICATIONS --- */
+.notification-toast { 
+  position: fixed; 
+  top: 20px; 
+  left: 50%; 
+  transform: translateX(-50%); 
+  background: #10B981; 
+  color: white; 
+  padding: 12px 24px; 
+  border-radius: 50px; 
+  z-index: 3000; 
+  font-weight: 600; 
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5); 
+  white-space: nowrap;
+}
+
+/* --- PASTE THIS INSIDE YOUR CSS CONSTANT --- */
+
+.error-toast { 
+  position: fixed; 
+  top: 20px; 
+  left: 50%; 
+  transform: translateX(-50%); 
+  background: #EF4444; /* RED COLOR */
+  color: white; 
+  padding: 12px 24px; 
+  border-radius: 50px; 
+  z-index: 9999; 
+  font-weight: 600; 
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5); 
+  white-space: nowrap;
 }
 
 /* --- GLASSMORPHISM CARD --- */
@@ -1030,64 +1130,58 @@ body { margin: 0; overflow-x: hidden; background: var(--bg-dark); }
   border-radius: 24px;
   box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
 }
+  /* --- UNIVERSAL CENTER POPUP (Fixes Desktop) --- */
+.otp-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.85); /* Dark background */
+  z-index: 10000;
+  
+  /* This centers the card specifically */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  backdrop-filter: blur(5px); /* Nice blur effect */
+}
+
+/* Ensure the card looks good on desktop */
+.modal-card {
+  position: relative;
+  width: 90%;
+  max-width: 600px; /* Limits width on big screens */
+  max-height: 90vh; /* Prevents it from being too tall */
+  overflow-y: auto; /* Scroll inside the card if needed */
+  margin: 0 auto;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
 
 /* --- NAVIGATION --- */
 .top-nav {
-  position: fixed;
-  top: 0;
-  width: 100%;
-  z-index: 1000;
-  padding: 20px;
-  display: flex;
-  justify-content: center;
+  position: fixed; top: 0; width: 100%; z-index: 1000; padding: 20px;
+  display: flex; justify-content: center; box-sizing: border-box;
 }
 .nav-container {
-  width: 100%;
-  max-width: 1200px;
-  padding: 12px 24px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+  width: 100%; max-width: 1200px; padding: 12px 24px;
+  display: flex; justify-content: space-between; align-items: center;
 }
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  cursor: pointer;
-}
-.icon-box {
-  color: var(--primary);
-  display: flex;
-  filter: drop-shadow(0 0 8px var(--primary-glow));
-}
+.brand { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.icon-box { color: var(--primary); display: flex; filter: drop-shadow(0 0 8px var(--primary-glow)); }
 .pulse-anim { animation: pulse 2s infinite; }
-.main-logo {
-  font-weight: 800;
-  font-size: 1.5rem;
-  letter-spacing: -0.5px;
-}
+.main-logo { font-weight: 800; font-size: 1.5rem; letter-spacing: -0.5px; }
 .accent-text { color: var(--primary); }
 
 .user-indicator {
-  width: 44px;
-  height: 44px;
-  border-radius: 14px;
-  background: rgba(255,255,255,0.05);
-  border: 1px solid rgba(255,255,255,0.1);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  overflow: hidden;
-  transition: 0.3s;
+  width: 44px; height: 44px; border-radius: 14px; background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center;
+  cursor: pointer; overflow: hidden; transition: 0.3s;
 }
-.user-indicator:hover, .user-indicator.active {
-  border-color: var(--primary);
-  box-shadow: 0 0 15px var(--primary-glow);
-}
+.user-indicator:hover, .user-indicator.active { border-color: var(--primary); box-shadow: 0 0 15px var(--primary-glow); }
 .nav-profile-img { width: 100%; height: 100%; object-fit: cover; }
 
-/* --- DROPDOWN --- */
+/* --- DROPDOWN (FIXED TRANSPARENCY) --- */
 .profile-dropdown {
   position: absolute;
   top: 70px;
@@ -1095,12 +1189,13 @@ body { margin: 0; overflow-x: hidden; background: var(--bg-dark); }
   width: 300px;
   padding: 20px;
   z-index: 1001;
+  /* Added solid background so it doesn't merge with the page */
+  background: #0B1120; 
+  border: 1px solid var(--glass-border);
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
 }
 .dropdown-header { display: flex; align-items: center; gap: 15px; margin-bottom: 15px; }
-.header-photo { 
-  width: 50px; height: 50px; border-radius: 12px; background: rgba(0,0,0,0.3); 
-  display: flex; align-items: center; justify-content: center; overflow: hidden;
-}
+.header-photo { width: 50px; height: 50px; border-radius: 12px; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .header-info { display: flex; flex-direction: column; }
 .header-info .name { font-weight: 700; color: #fff; }
 .header-info .email { font-size: 0.8rem; color: var(--text-muted); }
@@ -1119,25 +1214,13 @@ body { margin: 0; overflow-x: hidden; background: var(--bg-dark); }
 
 /* --- MAIN STAGE --- */
 .main-stage {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 120px 20px 40px;
-  position: relative;
-  z-index: 1;
+  max-width: 1200px; margin: 0 auto; padding: 120px 20px 40px;
+  position: relative; z-index: 1; box-sizing: border-box;
 }
 
 /* --- FORMS & LOGIN --- */
-.login-section {
-  max-width: 500px;
-  margin: 40px auto;
-  padding: 40px;
-  text-align: center;
-}
-.form-header .logo-lg {
-  color: var(--primary);
-  margin-bottom: 20px;
-  filter: drop-shadow(0 0 15px var(--primary-glow));
-}
+.login-section { max-width: 500px; margin: 40px auto; padding: 40px; text-align: center; }
+.form-header .logo-lg { color: var(--primary); margin-bottom: 20px; filter: drop-shadow(0 0 15px var(--primary-glow)); }
 .form-header h2 { font-size: 2rem; font-weight: 800; margin-bottom: 10px; }
 .form-header p { color: var(--text-muted); line-height: 1.5; margin-bottom: 30px; }
 
@@ -1147,115 +1230,136 @@ body { margin: 0; overflow-x: hidden; background: var(--bg-dark); }
   text-transform: uppercase; letter-spacing: 1px; margin-bottom: 6px;
 }
 input, select {
-  width: 100%;
-  background: rgba(15, 23, 42, 0.6);
-  border: 1px solid var(--glass-border);
-  padding: 14px;
-  border-radius: 12px;
-  color: #fff;
-  font-family: var(--font-main);
-  font-size: 1rem;
-  transition: 0.3s;
+  width: 100%; background: rgba(15, 23, 42, 0.6); border: 1px solid var(--glass-border);
+  padding: 14px; border-radius: 12px; color: #fff; font-family: var(--font-main);
+  font-size: 1rem; transition: 0.3s; box-sizing: border-box;
 }
 input:focus, select:focus {
-  outline: none;
-  border-color: var(--primary);
-  box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.1);
-  background: rgba(15, 23, 42, 0.9);
+  outline: none; border-color: var(--primary); box-shadow: 0 0 0 4px rgba(34, 211, 238, 0.1); background: rgba(15, 23, 42, 0.9);
 }
 .form-group-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .form-group-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 
 /* --- BUTTONS --- */
 .primary-button {
-  background: linear-gradient(135deg, var(--primary), #0891b2);
-  color: #0f172a;
-  border: none;
-  padding: 16px;
-  border-radius: 12px;
-  font-weight: 700;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: 0.3s;
-  position: relative;
-  overflow: hidden;
+  background: linear-gradient(135deg, var(--primary), #0891b2); color: #0f172a;
+  border: none; padding: 16px; border-radius: 12px; font-weight: 700; font-size: 1rem;
+  cursor: pointer; transition: 0.3s; position: relative; overflow: hidden; width: 100%;
 }
-.primary-button.lg { padding: 20px 40px; font-size: 1.1rem; border-radius: 16px; }
-.glow-effect:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 10px 30px -5px var(--primary-glow);
-}
+.primary-button.lg { padding: 20px 40px; font-size: 1.1rem; border-radius: 16px; width: auto; }
+.glow-effect:hover { transform: translateY(-2px); box-shadow: 0 10px 30px -5px var(--primary-glow); }
 .btn-secondary {
-  background: transparent;
-  border: 1px solid var(--glass-border);
-  color: var(--text-muted);
-  padding: 14px 24px;
-  border-radius: 12px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: 0.2s;
+  background: transparent; border: 1px solid var(--glass-border); color: var(--text-muted);
+  padding: 14px 24px; border-radius: 12px; font-weight: 600; cursor: pointer; transition: 0.2s;
 }
 .btn-secondary:hover { color: #fff; border-color: #fff; }
 .btn-action {
-  background: var(--text-main);
-  color: #0f172a;
-  border: none;
-  padding: 14px 28px;
-  border-radius: 12px;
-  font-weight: 800;
-  cursor: pointer;
+  background: var(--text-main); color: #0f172a; border: none; padding: 14px 28px;
+  border-radius: 12px; font-weight: 800; cursor: pointer;
 }
-.text-link {
-  background: none; border: none; color: var(--primary); font-weight: 600; cursor: pointer;
-}
+.text-link { background: none; border: none; color: var(--primary); font-weight: 600; cursor: pointer; }
 .footer-text { color: var(--text-muted); font-size: 0.9rem; margin-right: 8px; }
+
+/* --- COMPACT ACTION CAPSULE (Fixes Wide Desktop) --- */
+.action-bar-static {
+  /* Sizing & Positioning */
+  width: 90%;              /* Fits mobile nicely */
+  max-width: 480px;        /* STOPS it from stretching on Desktop */
+  margin: 40px auto 60px;  /* Centers it horizontally */
+  
+  /* Layout */
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  gap: 12px;
+
+  /* Glass/Capsule Styling */
+  background: rgba(15, 23, 42, 0.9);
+  backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 100px;    /* Makes it fully rounded */
+  padding: 10px 14px;      /* Compact padding */
+  box-shadow: 0 20px 40px -10px rgba(0, 0, 0, 0.5); /* Nice floating shadow */
+}
+
+/* Cancel Button Hover Effect */
+.btn-ghost {
+  background: transparent;
+  border: none;
+  color: #94a3b8;
+  padding: 8px 16px;
+  border-radius: 20px;
+  cursor: pointer;
+  transition: 0.2s;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+/* Stats Counter */
+.capsule-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+  
+  /* Glass style */
+  background: rgba(15, 23, 42, 0.9);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  backdrop-filter: blur(12px);
+  padding: 16px 24px;
+  border-radius: 50px;
+  width: 90%;
+  max-width: 600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.dock-btns {
+  display: flex !important;
+  gap: 15px !important;
+  width: auto !important; /* Let buttons determine width */
+}
+
+/* This fixes the missing button */
+.btn-compact {
+  width: auto !important;
+  min-width: 150px !important; /* Forces it to have width */
+  padding: 12px 24px !important;
+  white-space: nowrap !important;
+}
+
+/* --- PROFILE GRID --- */
+.profile-grid-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+.section-header { margin-bottom: 30px; }
 
 /* --- HERO SCREEN --- */
 .hero-grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 60px; align-items: center; }
-.hero-content h1 {
-  font-size: 4.5rem; line-height: 1; font-weight: 800; margin-bottom: 24px;
-  letter-spacing: -2px;
-}
-.gradient-text {
-  background: linear-gradient(to right, var(--primary), var(--secondary));
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
+.hero-content h1 { font-size: 4.5rem; line-height: 1; font-weight: 800; margin-bottom: 24px; letter-spacing: -2px; }
+.gradient-text { background: linear-gradient(to right, var(--primary), var(--secondary)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 .mini-badge {
   display: inline-block; padding: 6px 12px; border-radius: 100px;
   background: rgba(34, 211, 238, 0.1); border: 1px solid rgba(34, 211, 238, 0.2);
-  color: var(--primary); font-size: 0.75rem; font-weight: 800; letter-spacing: 1px;
-  margin-bottom: 20px;
+  color: var(--primary); font-size: 0.75rem; font-weight: 800; letter-spacing: 1px; margin-bottom: 20px;
 }
-.mini-badge.success { background: rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.2); color: var(--success); }
-
-.bmi-mini-card {
-  display: inline-flex; align-items: center; gap: 16px; padding: 16px 24px; margin-bottom: 40px;
-}
-.bmi-mini-card .icon-circle {
-  width: 48px; height: 48px; border-radius: 50%; background: rgba(255,255,255,0.05);
-  display: flex; align-items: center; justify-content: center; color: var(--text-main);
-}
+.bmi-mini-card { display: inline-flex; align-items: center; gap: 16px; padding: 16px 24px; margin-bottom: 40px; }
+.bmi-mini-card .icon-circle { width: 48px; height: 48px; border-radius: 50%; background: rgba(255,255,255,0.05); display: flex; align-items: center; justify-content: center; color: var(--text-main); }
 .bmi-text { display: flex; flex-direction: column; }
 .bmi-text .label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; font-weight: 700; }
 .bmi-text .value { font-size: 1.2rem; font-weight: 800; color: #fff; }
 .bmi-text .status { font-weight: 400; font-size: 1rem; color: var(--text-muted); margin-left: 5px; }
-.bmi-yellow .value { color: var(--warning); }
-.bmi-green .value { color: var(--success); }
-.bmi-red .value { color: var(--danger); }
+.bmi-yellow .value { color: var(--warning); } .bmi-green .value { color: var(--success); } .bmi-red .value { color: var(--danger); }
 
 /* --- SIDEBAR HISTORY --- */
 .history-sidebar { padding: 24px; height: 500px; display: flex; flex-direction: column; }
-.sidebar-header {
-  display: flex; align-items: center; gap: 10px; font-weight: 700; text-transform: uppercase;
-  color: var(--text-muted); font-size: 0.85rem; letter-spacing: 1px; margin-bottom: 20px;
-}
+.sidebar-header { display: flex; align-items: center; gap: 10px; font-weight: 700; text-transform: uppercase; color: var(--text-muted); font-size: 0.85rem; letter-spacing: 1px; margin-bottom: 20px; }
 .history-list { overflow-y: auto; flex: 1; padding-right: 5px; }
-.history-item {
-  padding: 16px; border-radius: 16px; background: rgba(255,255,255,0.03);
-  margin-bottom: 10px; cursor: pointer; display: flex; justify-content: space-between;
-  align-items: center; transition: 0.2s; border: 1px solid transparent;
-}
+.history-item { padding: 16px; border-radius: 16px; background: rgba(255,255,255,0.03); margin-bottom: 10px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; transition: 0.2s; border: 1px solid transparent; }
 .history-item:hover { background: rgba(255,255,255,0.08); border-color: var(--glass-border); }
 .history-date { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 4px; }
 .history-result { font-weight: 700; font-size: 1rem; color: #fff; }
@@ -1266,29 +1370,17 @@ input:focus, select:focus {
 .header-row { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 40px; }
 .section-title h2 { font-size: 3rem; margin: 0 0 10px 0; font-weight: 800; }
 .user-welcome { color: var(--text-muted); font-size: 1.1rem; }
-.search-wrapper {
-  display: flex; align-items: center; gap: 12px; padding: 12px 20px; width: 350px;
-}
+.search-wrapper { display: flex; align-items: center; gap: 12px; padding: 12px 20px; width: 350px; }
 .search-wrapper input { background: transparent; border: none; padding: 0; box-shadow: none; }
-.search-wrapper svg { color: var(--text-muted); }
 
 .biomarker-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px;
   max-height: 60vh; overflow-y: auto; padding-bottom: 100px;
 }
-.marker-card {
-  padding: 20px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: 0.2s;
-  border: 1px solid transparent;
-}
+.marker-card { padding: 20px; display: flex; align-items: center; gap: 16px; cursor: pointer; transition: 0.2s; border: 1px solid transparent; }
 .marker-card:hover { transform: translateY(-3px); background: rgba(255,255,255,0.07); }
-.marker-card.selected {
-  background: rgba(34, 211, 238, 0.15); border-color: var(--primary);
-}
-.check-circle {
-  width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2);
-  display: flex; align-items: center; justify-content: center; color: var(--primary);
-  transition: 0.2s;
-}
+.marker-card.selected { background: rgba(34, 211, 238, 0.15); border-color: var(--primary); }
+.check-circle { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.2); display: flex; align-items: center; justify-content: center; color: var(--primary); transition: 0.2s; }
 .marker-card.selected .check-circle { border-color: var(--primary); background: rgba(34,211,238,0.2); }
 .marker-card span { font-weight: 600; font-size: 0.95rem; text-transform: capitalize; }
 
@@ -1304,14 +1396,8 @@ input:focus, select:focus {
 
 /* --- LOADING --- */
 .loading-state { text-align: center; padding: 100px 0; }
-.neural-spinner-lg {
-  position: relative; width: 120px; height: 120px; margin: 0 auto 40px;
-  display: flex; align-items: center; justify-content: center;
-}
-.spinner-ring {
-  position: absolute; border-radius: 50%; border: 2px solid transparent;
-  border-top-color: var(--primary); border-left-color: var(--secondary);
-}
+.neural-spinner-lg { position: relative; width: 120px; height: 120px; margin: 0 auto 40px; display: flex; align-items: center; justify-content: center; }
+.spinner-ring { position: absolute; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--primary); border-left-color: var(--secondary); }
 .ring-1 { width: 100%; height: 100%; animation: spin 2s linear infinite; }
 .ring-2 { width: 70%; height: 70%; animation: spin 3s linear infinite reverse; border-top-color: var(--secondary); border-left-color: var(--primary); }
 .spinner-core { color: #fff; animation: pulse 1.5s infinite; }
@@ -1320,11 +1406,7 @@ input:focus, select:focus {
 .results-intro { display: flex; flex-direction: column; gap: 10px; margin-bottom: 40px; }
 .results-title-row { display: flex; justify-content: space-between; align-items: flex-end; }
 .results-title-row h2 { font-size: 3rem; margin: 0; font-weight: 800; line-height: 1; }
-.export-btn {
-  display: flex; align-items: center; gap: 10px; padding: 12px 20px;
-  background: rgba(255,255,255,0.05); color: var(--text-main); border: 1px solid var(--glass-border);
-  border-radius: 12px; cursor: pointer; font-weight: 600; transition: 0.2s;
-}
+.export-btn { display: flex; align-items: center; gap: 10px; padding: 12px 20px; background: rgba(255,255,255,0.05); color: var(--text-main); border: 1px solid var(--glass-border); border-radius: 12px; cursor: pointer; font-weight: 600; transition: 0.2s; }
 .export-btn:hover { background: rgba(255,255,255,0.1); }
 
 .results-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 24px; margin-bottom: 40px; }
@@ -1343,10 +1425,7 @@ input:focus, select:focus {
 .mini-result h4 { margin: 0; font-size: 1.25rem; font-weight: 700; }
 
 .precautions-section { display: flex; gap: 24px; padding: 30px; margin-bottom: 40px; }
-.section-icon { 
-  width: 50px; height: 50px; background: rgba(245, 158, 11, 0.1); color: var(--warning);
-  border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
-}
+.section-icon { width: 50px; height: 50px; background: rgba(245, 158, 11, 0.1); color: var(--warning); border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .precautions-section h3 { color: var(--warning); margin: 0 0 10px 0; }
 .precautions-section p { margin: 0; color: #cbd5e1; line-height: 1.6; white-space: pre-line; }
 
@@ -1382,17 +1461,177 @@ input:focus, select:focus {
 @keyframes scaleIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
 @keyframes fadeInDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
 
-/* --- RESPONSIVE --- */
+/* --- MOBILE RESPONSIVE (IMPROVED) --- */
 @media (max-width: 768px) {
-  .hero-grid { grid-template-columns: 1fr; text-align: center; }
-  .hero-content h1 { font-size: 3rem; }
-  .hero-actions { justify-content: center; display: flex; }
-  .history-sidebar { display: none; } /* Hide sidebar on mobile for cleaner look */
+  .top-nav { padding: 10px; }
+  .nav-container { padding: 10px 15px; }
+  .brand .main-logo { font-size: 1.2rem; }
+  .user-indicator { width: 36px; height: 36px; }
+
+  .otp-overlay {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    background: #0B1120 !important; /* Solid background, hiding the app behind it */
+    z-index: 99999 !important;      /* Maximum priority */
+    padding: 0 !important;
+    display: flex !important;
+    align-items: flex-start !important; /* Start from top */
+    overflow-y: auto !important;    /* Allow scrolling within the overlay */
+  }
+
+  /* 2. Make the card fill that space completely */
+  .modal-card {
+    width: 100% !important;
+    min-height: 100vh !important;   /* Force full height */
+    max-width: none !important;
+    max-height: none !important;
+    border-radius: 0 !important;    /* No corners looks like a full page */
+    border: none !important;
+    background: transparent !important; /* Background is handled by overlay now */
+    box-shadow: none !important;
+    margin: 0 !important;
+    padding: 20px !important;
+  }
+
+  /* 3. Ensure the close button is easily clickable at the top right */
+  .close-btn {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    background: rgba(255, 255, 255, 0.1);
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100000 !important;
+  }
+  
+  .main-stage { padding: 90px 15px 120px; }
+
+  /* Stack Grids */
+  .hero-grid { grid-template-columns: 1fr; gap: 40px; text-align: center; }
+  .hero-content h1 { font-size: 2.8rem; }
+  .hero-actions { justify-content: center; width: 100%; }
+  .hero-actions button { width: 100%; }
+  
+  /* Show history on mobile */
+  .history-sidebar { 
+    display: flex;           /* CHANGED from block to flex */
+    flex-direction: column;  /* Keeps header at top, list below */
+    width: 100%; 
+    height: 400px;           /* Fixed height ensures scrolling happens inside */
+    margin-top: 30px; 
+  }
+  .history-item { justify-content: space-between; }
+  
+  /* Profile Page Stacking */
+  .profile-grid-layout { grid-template-columns: 1fr; }
+  .form-group-2, .form-group-3 { grid-template-columns: 1fr; }
+  
+  /* Symptoms Screen */
+  .header-row { flex-direction: column; align-items: flex-start; gap: 15px; margin-bottom: 20px; }
+  .search-wrapper { width: 100%; }
+  .biomarker-grid { grid-template-columns: 1fr 1fr; gap: 10px; } /* 2 Columns on mobile */
+  
+  /* Results Screen */
+  .results-title-row { flex-direction: column; align-items: flex-start; gap: 15px; }
+  .export-btn { width: 100%; justify-content: center; margin-top: 10px; }
   .results-grid { grid-template-columns: 1fr; }
-  .results-title-row { flex-direction: column; align-items: flex-start; gap: 16px; }
-  .biomarker-grid { grid-template-columns: 1fr 1fr; }
-  .primary-result h3 { font-size: 2.5rem; }
-  .precautions-section { flex-direction: column; }
-  .form-group-3, .form-group-2 { grid-template-columns: 1fr; }
+  .primary-result { padding: 24px; }
+  .primary-result h3 { font-size: 2rem; }
+  .side-results { display: grid; grid-template-columns: 1fr; gap: 10px; }
+  
+  .precautions-section { flex-direction: column; padding: 20px; }
+  
+  /* Floating Dock */
+  .floating-dock { bottom: 20px; width: 94%; padding: 12px; flex-wrap: wrap; gap: 10px; justify-content: center; }
+  .dock-stats { width: 100%; text-align: center; margin-bottom: 5px; display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .dock-btns { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
+}
+  .photo-upload-container {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.photo-label {
+  cursor: pointer;
+  display: block;
+}
+
+.photo-preview-box {
+  width: 120px;       /* Fixed width */
+  height: 120px;      /* Fixed height */
+  border-radius: 50%; /* Makes it a perfect circle */
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px dashed rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;   /* CRITICAL: Cuts off any part of the image outside the circle */
+  transition: 0.3s;
+}
+
+.photo-preview-box:hover {
+  border-color: #22d3ee;
+  background: rgba(34, 211, 238, 0.1);
+}
+
+.photo-preview {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;  /* CRITICAL: Scales image to fill box without stretching */
+}
+
+.photo-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  color: #94a3b8;
+  gap: 5px;
+  font-size: 0.8rem;
+}
+
+.hidden-input {
+  display: none;
+}
+action-bar-static {
+    width: 98% !important;       
+    max-width: none !important;
+    padding: 6px 4px !important; /* Almost zero padding on sides */
+    gap: 2px !important;         /* Tiny gap between items */
+    bottom: 20px !important;     /* Keep it slightly above bottom edge */
+  }
+
+  /* 2. Shrink 'Cancel' to bare minimum */
+  .btn-ghost {
+    padding: 6px 8px !important;
+    font-size: 0.75rem !important;
+    letter-spacing: 0 !important;
+  }
+
+  /* 3. Aggressively shrink 'Analyze' button */
+  .primary-button {
+    padding: 8px 12px !important;  /* Very tight padding */
+    font-size: 0.8rem !important;
+    min-width: 0 !important;       /* Allow it to shrink */
+    width: auto !important;
+    white-space: nowrap !important;
+    letter-spacing: 0 !important;
+  }
+  
+  /* 4. Shrink the Counter in the middle */
+  .capsule-stats span:first-child {
+    font-size: 1rem !important;
+  }
+  .capsule-stats span:last-child {
+    font-size: 0.5rem !important;
+    letter-spacing: 0 !important;
+  }
 }
 `;
